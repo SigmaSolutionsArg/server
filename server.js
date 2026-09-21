@@ -275,6 +275,7 @@ function estadoInicial() {
 }
 
 let partida = estadoInicial();
+let contadorCartas = 0;            // id incremental: distingue cada carta aunque se repita el mismo tipo
 let timer = null;                 // un único watchdog activo a la vez
 let timerAbandono = null;
 const sockets = new Map();        // jugadorId -> socket.id vigente
@@ -415,7 +416,9 @@ function evaluarCasillero(jugadorId, permitirEspecial) {
 
     if (tipo === 'carta') {
         partida.estado = 'CARTA_ACTIVA';
-        partida.cartaActiva = { jugadorId, carta: GestorCartas.obtenerCarta() };
+        // el id es lo que le permite al cliente distinguir "sigo mostrando esta" de
+        // "es una carta nueva encadenada, hay que volver a abrir el modal"
+        partida.cartaActiva = { jugadorId, carta: GestorCartas.obtenerCarta(), id: ++contadorCartas };
         return true;
     }
 
