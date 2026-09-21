@@ -149,6 +149,104 @@ const MotorConecta4 = {
 };
 
 // ==========================================
+// MÓDULO 4: MOTOR DE RAPIDEZ VISUAL
+//
+// El servidor genera TODA la secuencia de objetos por adelantado y la manda
+// una sola vez en el snapshot. Cada cliente la dibuja usando el reloj del
+// servidor (mj.inicio), así todos ven lo mismo y una recarga retoma en el
+// punto exacto. Los clicks se validan contra esa misma secuencia.
+// ==========================================
+const RAPIDEZ = {
+    META_PUNTOS: 10,
+    CUENTA_REGRESIVA: 3200,   // ms de "3, 2, 1, ¡YA!" antes del primer objeto
+    DURACION: 60_000,         // si nadie llega a 10, gana el que tenga más
+    INTERVALO_MIN: 190,
+    INTERVALO_MAX: 430,
+    TOLERANCIA: 400           // margen de latencia al validar un click
+};
+
+// bueno = suma 1 | malo = resta 1
+const TIPOS_BUENOS = [
+    { tipo: 'verde', peso: 58, dura: [850, 1450] },
+    { tipo: 'verde_multi', peso: 20, dura: [2000, 2800], clicks: 5 },
+    { tipo: 'verde_hold', peso: 22, dura: [2000, 2800], hold: 900 }
+];
+const TIPOS_MALOS = [
+    { tipo: 'turquesa', peso: 18, dura: [700, 1250] },  // casi verde
+    { tipo: 'lima', peso: 16, dura: [700, 1250] },      // verde amarillento
+    { tipo: 'cuadrado', peso: 14, dura: [800, 1400] },  // verde, pero cuadrado
+    { tipo: 'rombo', peso: 11, dura: [800, 1400] },     // verde, pero rombo
+    { tipo: 'cruz', peso: 11, dura: [900, 1500] },      // verde con una X encima
+    { tipo: 'rojo', peso: 12, dura: [800, 1400] },
+    { tipo: 'emoji', peso: 18, dura: [800, 1500] }
+];
+const EMOJIS_TRAMPA = ['🥑', '🐸', '🍀', '🟩', '🥦', '🫒', '🍏', '🐍', '🌲', '🦖', '🧪', '🍐', '🥝'];
+
+const azar = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+
+function elegirPonderado(lista) {
+    const total = lista.reduce((s, x) => s + x.peso, 0);
+    let r = Math.random() * total;
+    for (const x of lista) { if ((r -= x.peso) <= 0) return x; }
+    return lista[lista.length - 1];
+}
+
+// La dificultad sube: hacia el final aparecen más seguido y duran menos
+function generarObjetosRapidez() {
+    const objetos = [];
+    let t = 0, id = 0;
+    while (t < RAPIDEZ.DURACION) {
+        const progreso = t / RAPIDEZ.DURACION;
+        const escala = 1 - 0.35 * progreso;
+
+        t += Math.round(azar(RAPIDEZ.INTERVALO_MIN, RAPIDEZ.INTERVALO_MAX) * escala);
+        const bueno = Math.random() < 0.38;
+        const plantilla = elegirPonderado(bueno ? TIPOS_BUENOS : TIPOS_MALOS);
+
+        const o = {
+            id: id++,
+            tipo: plantilla.tipo,
+            bueno,
+            x: azar(8, 92),                 // % dentro de la arena
+            y: azar(10, 90),
+            tam: azar(38, 66),              // px
+            aparece: t,
+            dura: Math.round(azar(plantilla.dura[0], plantilla.dura[1]) * escala)
+        };
+        if (plantilla.clicks) o.clicks = plantilla.clicks;
+        if (plantilla.hold) o.hold = plantilla.hold;
+        if (plantilla.tipo === 'emoji') o.emoji = EMOJIS_TRAMPA[azar(0, EMOJIS_TRAMPA.length - 1)];
+        if (Math.random() < 0.3) { o.dx = azar(-22, 22); o.dy = azar(-22, 22); } // se desplaza mientras vive
+
+        objetos.push(o);
+    }
+    return objetos;
+}
+
+const MotorRapidez = {
+    crearInstancia: (idX, idO, nombres) => {
+        const inicio = Date.now() + RAPIDEZ.CUENTA_REGRESIVA;
+        return {
+            tipo: 'rapidez',
+            jugadores: { X: idX, O: idO },
+            nombres,
+            inicio,                          // reloj del SERVIDOR
+            fin: inicio + RAPIDEZ.DURACION,
+            meta: RAPIDEZ.META_PUNTOS,
+            objetos: generarObjetosRapidez(),
+            puntos: { X: 0, O: 0 },
+            tomados: {},                     // idObjeto -> 'X' | 'O'  (ya no lo puede agarrar nadie)
+            golpes: {},                      // idObjeto -> { X, O }   (para los de 5 toques)
+            errores: {},                     // idObjeto -> { X, O }   (para no penalizar dos veces lo mismo)
+            terminado: false,
+            ganador: null,
+            mensaje: null
+        };
+    },
+    buscar: (mj, id) => mj.objetos.find(o => o.id === id) || null
+};
+
+// ==========================================
 // ESTADO CENTRAL
 //
 // estado: ESPERANDO_HOST -> LOBBY -> JUGANDO <-> CARTA_ACTIVA
@@ -169,8 +267,8 @@ function estadoInicial() {
         turnoActual: null,
         ultimoDado: null,       // { valor, jugadorId }
         cartaActiva: null,      // { jugadorId, carta }
-        reto: null,             // { atacanteId, oponentes: [{id,nombre,avatar}], juego: 'tateti'|'conecta4' }
-        minijuegoActivo: null,  // instancia de MotorTaTeTi o MotorConecta4
+        reto: null,             // { atacanteId, oponentes: [{id,nombre,avatar}], juego: 'tateti'|'conecta4'|'rapidez' }
+        minijuegoActivo: null,  // instancia de MotorTaTeTi, MotorConecta4 o MotorRapidez
         ganadorId: null,
         cascadaUsada: false     // permite re-ejecutar UN solo especial en cadena por turno (ver evaluarCasillero)
     };
@@ -269,6 +367,9 @@ function armarWatchdog() {
                 armarTimer(T.ELEGIR_RIVAL, retoAutomatico);
             } else if (mj && mj.terminado) {
                 armarTimer(T.CIERRE_MINIJUEGO, cerrarMinijuego);
+            } else if (mj && mj.tipo === 'rapidez') {
+                // no hay turnos: el reloj es el fin de la ronda
+                armarTimer(Math.max(1000, mj.fin - Date.now() + 500), cerrarRapidezPorTiempo);
             } else if (mj) {
                 armarTimer(T.TURNO_MINIJUEGO, () => {
                     const m = partida.minijuegoActivo;
@@ -324,8 +425,9 @@ function evaluarCasillero(jugadorId, permitirEspecial) {
             .map(j => ({ id: j.id, nombre: j.nombre, avatar: j.avatar }));
         if (oponentes.length) {
             partida.estado = 'MINIJUEGO';
-            // se sortea qué minijuego toca: ta-te-ti o 4 en línea
-            partida.reto = { atacanteId: jugadorId, oponentes, juego: Math.random() < 0.5 ? 'tateti' : 'conecta4' };
+            // se sortea qué minijuego toca: ta-te-ti, 4 en línea o rapidez visual
+            const JUEGOS = ['tateti', 'conecta4', 'rapidez'];
+            partida.reto = { atacanteId: jugadorId, oponentes, juego: JUEGOS[Math.floor(Math.random() * JUEGOS.length)] };
             return true;
         }
         // no hay rival disponible: el reto se saltea, se trata como casillero normal
@@ -392,9 +494,10 @@ function iniciarReto(atacanteId, defensorId) {
     };
 
     partida.reto = null;
-    partida.minijuegoActivo = r.juego === 'conecta4'
-        ? MotorConecta4.crearInstancia(atacanteId, defensorId, nombres)
-        : MotorTaTeTi.crearInstancia(atacanteId, defensorId, nombres);
+    partida.minijuegoActivo =
+        r.juego === 'conecta4' ? MotorConecta4.crearInstancia(atacanteId, defensorId, nombres) :
+        r.juego === 'rapidez' ? MotorRapidez.crearInstancia(atacanteId, defensorId, nombres) :
+            MotorTaTeTi.crearInstancia(atacanteId, defensorId, nombres);
 
     armarWatchdog();
     emitirEstado();
@@ -481,6 +584,73 @@ function accionConecta4(jugadorId, columna) {
         emitirEstado();
     }
     return true;
+}
+
+// No hay turnos: ambos jugadores clickean libremente. Cada click se valida contra
+// la secuencia (ya generada) verificando que el objeto esté vivo en ESTE instante.
+function accionRapidez(jugadorId, datos) {
+    const mj = partida.minijuegoActivo;
+    if (partida.estado !== 'MINIJUEGO' || !mj || mj.tipo !== 'rapidez' || mj.terminado) return false;
+
+    const simbolo = mj.jugadores.X === jugadorId ? 'X' : mj.jugadores.O === jugadorId ? 'O' : null;
+    if (!simbolo) return false; // los que miran no juegan
+
+    const idObjeto = datos && datos.idObjeto;
+    if (!Number.isInteger(idObjeto)) return false;
+
+    const o = MotorRapidez.buscar(mj, idObjeto);
+    if (!o || mj.tomados[idObjeto]) return false;
+
+    // el objeto tiene que estar vivo AHORA (con margen por la latencia)
+    const t = Date.now() - mj.inicio;
+    if (t < -RAPIDEZ.TOLERANCIA) return false;
+    if (t < o.aparece - RAPIDEZ.TOLERANCIA || t > o.aparece + o.dura + RAPIDEZ.TOLERANCIA) return false;
+
+    let resultado;
+
+    if (!o.bueno) {
+        const err = mj.errores[idObjeto] || (mj.errores[idObjeto] = {});
+        if (err[simbolo]) return false;                       // ya pagó por este
+        err[simbolo] = true;
+        mj.puntos[simbolo] = Math.max(0, mj.puntos[simbolo] - 1);
+        resultado = 'fallo';
+    } else if (o.hold) {
+        if (!datos || datos.accion !== 'hold') return false;  // un toque suelto no alcanza
+        mj.tomados[idObjeto] = simbolo;
+        mj.puntos[simbolo]++;
+        resultado = 'punto';
+    } else if (o.clicks) {
+        const g = mj.golpes[idObjeto] || (mj.golpes[idObjeto] = { X: 0, O: 0 });
+        g[simbolo]++;
+        if (g[simbolo] >= o.clicks) {
+            mj.tomados[idObjeto] = simbolo;
+            mj.puntos[simbolo]++;
+            resultado = 'punto';
+        } else {
+            resultado = 'progreso';
+        }
+    } else {
+        mj.tomados[idObjeto] = simbolo;
+        mj.puntos[simbolo]++;
+        resultado = 'punto';
+    }
+
+    // evento liviano: mandar el snapshot entero en cada click sería carísimo
+    io.emit('rapidez_tick', {
+        idObjeto, simbolo, resultado,
+        golpes: mj.golpes[idObjeto] || null,
+        puntos: mj.puntos
+    });
+
+    if (mj.puntos[simbolo] >= mj.meta) finalizarMinijuego(simbolo, `${mj.puntos.X}-${mj.puntos.O}`);
+    return true;
+}
+
+function cerrarRapidezPorTiempo() {
+    const mj = partida.minijuegoActivo;
+    if (partida.estado !== 'MINIJUEGO' || !mj || mj.tipo !== 'rapidez' || mj.terminado) return;
+    const { X, O } = mj.puntos;
+    finalizarMinijuego(X === O ? 'EMPATE' : (X > O ? 'X' : 'O'), `SE ACABÓ EL TIEMPO ${X}-${O}`);
 }
 
 function finalizarMinijuego(resultado, nota) {
@@ -658,6 +828,14 @@ io.on('connection', (socket) => {
     socket.on('accion_conecta4', (d) => {
         if (!accionConecta4(socket.jugadorId, d && d.columna)) resync();
     });
+
+    // no se hace resync si devuelve false: pasa todo el tiempo (clicks a cosas ya muertas
+    // o ya tomadas por el rival) y reenviar el snapshot completo en cada fallo sería un
+    // desperdicio brutal — el cliente ya se corrige solo con el próximo 'rapidez_tick'/'sync'
+    socket.on('accion_rapidez', (d) => { accionRapidez(socket.jugadorId, d); });
+
+    // sincronización de reloj: el cliente mide el RTT y calcula su offset contra el servidor
+    socket.on('pedir_tiempo', (cb) => { if (typeof cb === 'function') cb(Date.now()); });
 
     // Fin de partida: el host vuelve al lobby con todos los jugadores
     socket.on('reiniciar_partida', () => {
