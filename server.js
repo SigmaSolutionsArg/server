@@ -19,14 +19,11 @@ const io = new Server(server, {
 // ==========================================
 const META = 59;                                   // índice del último casillero (número 60)
 const AVATARES = ['😎', '👻', '👾', '🤖'];
-const MAX_JUGADAS_MOVER = 30;                      // tope de movimientos en fase MOVER del ta-te-ti => empate
 
 const T = {
     TURNO_INACTIVO: 90_000,        
     DESCONECTADO_TURNO: 20_000,    
     CARTA: 20_000,                 
-    ELEGIR_RIVAL: 25_000,          
-    TURNO_MINIJUEGO: 30_000,       
     CIERRE_MINIJUEGO: 4_000,       
     LOBBY_GRACIA: 60_000,          
     PARTIDA_ABANDONADA: 10 * 60_000 
@@ -55,112 +52,12 @@ const GestorCartas = {
 };
 
 // ==========================================
-// MÓDULO 2: MOTOR DE TA-TE-TI
-// ==========================================
-const MotorTaTeTi = {
-    crearInstancia: (idX, idO, nombres) => ({
-        tipo: 'tateti',
-        jugadores: { X: idX, O: idO },
-        nombres,                       
-        turno: 'X',
-        fase: 'COLOCAR',
-        tablero: Array(9).fill(null),
-        fichasPuestas: { X: 0, O: 0 },
-        seleccionado: null,
-        jugadas: 0,                    
-        terminado: false,
-        ganador: null,                 
-        mensaje: null
-    }),
-    verificarGanador: (t) => {
-        const lineas = [[0,1,2], [3,4,5], [6,7,8], [0,3,6], [1,4,7], [2,5,8], [0,4,8], [2,4,6]];
-        for (const l of lineas) {
-            if (t[l[0]] && t[l[0]] === t[l[1]] && t[l[0]] === t[l[2]]) return t[l[0]];
-        }
-        return null;
-    }
-};
-
-// ==========================================
-// MÓDULO 3: MOTOR DE 4 EN LÍNEA
-// ==========================================
-const CONECTA4_FILAS = 6;
-const CONECTA4_COLS = 7;
-const MotorConecta4 = {
-    crearInstancia: (idX, idO, nombres) => ({
-        tipo: 'conecta4', jugadores: { X: idX, O: idO }, nombres, turno: 'X',
-        tablero: Array(CONECTA4_FILAS * CONECTA4_COLS).fill(null), terminado: false, ganador: null, mensaje: null
-    }),
-    filaDisponible: (tablero, col) => {
-        for (let f = CONECTA4_FILAS - 1; f >= 0; f--) {
-            if (tablero[f * CONECTA4_COLS + col] === null) return f;
-        }
-        return -1;
-    },
-    tableroLleno: (tablero) => tablero.every(c => c !== null),
-    verificarGanador: (t) => {
-        const get = (f, c) => (f < 0 || f >= CONECTA4_FILAS || c < 0 || c >= CONECTA4_COLS) ? null : t[f * CONECTA4_COLS + c];
-        const direcciones = [[0, 1], [1, 0], [1, 1], [1, -1]];
-        for (let f = 0; f < CONECTA4_FILAS; f++) {
-            for (let c = 0; c < CONECTA4_COLS; c++) {
-                const s = get(f, c);
-                if (!s) continue;
-                for (const [df, dc] of direcciones) {
-                    if (s === get(f + df, c + dc) && s === get(f + df * 2, c + dc * 2) && s === get(f + df * 3, c + dc * 3)) return s;
-                }
-            }
-        }
-        return null;
-    }
-};
-
-// ==========================================
-// MÓDULO 4: MOTOR DE RAPIDEZ VISUAL
-// ==========================================
-const RAPIDEZ = { META_PUNTOS: 10, CUENTA_REGRESIVA: 3200, DURACION: 60_000, INTERVALO_MIN: 190, INTERVALO_MAX: 430, TOLERANCIA: 400 };
-const TIPOS_BUENOS = [{ tipo: 'verde', peso: 58, dura: [850, 1450] }, { tipo: 'verde_multi', peso: 20, dura: [2000, 2800], clicks: 5 }, { tipo: 'verde_hold', peso: 22, dura: [2000, 2800], hold: 900 }];
-const TIPOS_MALOS = [{ tipo: 'turquesa', peso: 18, dura: [700, 1250] }, { tipo: 'lima', peso: 16, dura: [700, 1250] }, { tipo: 'cuadrado', peso: 14, dura: [800, 1400] }, { tipo: 'rombo', peso: 11, dura: [800, 1400] }, { tipo: 'cruz', peso: 11, dura: [900, 1500] }, { tipo: 'rojo', peso: 12, dura: [800, 1400] }, { tipo: 'emoji', peso: 18, dura: [800, 1500] }];
-const EMOJIS_TRAMPA = ['🥑', '🐸', '🍀', '🟩', '🥦', '🫒', '🍏', '🐍', '🌲', '🦖', '🧪', '🍐', '🥝'];
-const azar = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
-function elegirPonderado(lista) {
-    const total = lista.reduce((s, x) => s + x.peso, 0);
-    let r = Math.random() * total;
-    for (const x of lista) { if ((r -= x.peso) <= 0) return x; }
-    return lista[lista.length - 1];
-}
-function generarObjetosRapidez() {
-    const objetos = [];
-    let t = 0, id = 0;
-    while (t < RAPIDEZ.DURACION) {
-        const progreso = t / RAPIDEZ.DURACION;
-        const escala = 1 - 0.35 * progreso;
-        t += Math.round(azar(RAPIDEZ.INTERVALO_MIN, RAPIDEZ.INTERVALO_MAX) * escala);
-        const bueno = Math.random() < 0.38;
-        const plantilla = elegirPonderado(bueno ? TIPOS_BUENOS : TIPOS_MALOS);
-        const o = { id: id++, tipo: plantilla.tipo, bueno, x: azar(8, 92), y: azar(10, 90), tam: azar(38, 66), aparece: t, dura: Math.round(azar(plantilla.dura[0], plantilla.dura[1]) * escala) };
-        if (plantilla.clicks) o.clicks = plantilla.clicks;
-        if (plantilla.hold) o.hold = plantilla.hold;
-        if (plantilla.tipo === 'emoji') o.emoji = EMOJIS_TRAMPA[azar(0, EMOJIS_TRAMPA.length - 1)];
-        if (Math.random() < 0.3) { o.dx = azar(-22, 22); o.dy = azar(-22, 22); }
-        objetos.push(o);
-    }
-    return objetos;
-}
-const MotorRapidez = {
-    crearInstancia: (idX, idO, nombres) => {
-        const inicio = Date.now() + RAPIDEZ.CUENTA_REGRESIVA;
-        return { tipo: 'rapidez', jugadores: { X: idX, O: idO }, nombres, inicio, fin: inicio + RAPIDEZ.DURACION, meta: RAPIDEZ.META_PUNTOS, objetos: generarObjetosRapidez(), puntos: { X: 0, O: 0 }, tomados: {}, golpes: {}, errores: {}, terminado: false, ganador: null, mensaje: null };
-    },
-    buscar: (mj, id) => mj.objetos.find(o => o.id === id) || null
-};
-
-// ==========================================
 // ESTADO CENTRAL Y VARIABLES GLOBALES
 // ==========================================
 function estadoInicial() {
     return {
         creada: false, hostId: null, maxJugadores: 0, estado: 'ESPERANDO_HOST', jugadores: {}, ordenTurnos: [], turnoActual: null,
-        ultimoDado: null, cartaActiva: null, reto: null, minijuegoActivo: null, ganadorId: null, cascadaUsada: false
+        ultimoDado: null, cartaActiva: null, minijuegoActivo: null, ganadorId: null, cascadaUsada: false
     };
 }
 
@@ -178,10 +75,22 @@ function armarTimer(ms, fn) { limpiarTimer(); timer = setTimeout(() => { timer =
 function jugadoresConectados() { return Object.values(partida.jugadores).filter(j => j.conectado); }
 
 // ==========================================
-// MÓDULO 5: MOTOR DE MEMORIA (SE REQUIERE Y SE INSTANCIA)
+// MÓDULO 4: MOTOR DE MEMORIA (SE REQUIERE Y SE INSTANCIA)
 // ==========================================
 const crearMotorMemoria = require('./memoria-servidor');
 const MotorMemoria = crearMotorMemoria({
+    io,
+    obtenerPartida: () => partida,
+    armarWatchdog: armarWatchdog,
+    emitirEstado,
+    META
+});
+
+// ==========================================
+// MÓDULO 5: MOTOR DE RAPIDEZ (SE REQUIERE Y SE INSTANCIA)
+// ==========================================
+const crearMotorRapidez = require('./rapidez-servidor');
+const MotorRapidez = crearMotorRapidez({
     io,
     obtenerPartida: () => partida,
     armarWatchdog: armarWatchdog,
@@ -206,12 +115,12 @@ function avanzarTurno() {
 }
 
 function volverAJugar() {
-    partida.estado = 'JUGANDO'; partida.cartaActiva = null; partida.reto = null; partida.minijuegoActivo = null;
+    partida.estado = 'JUGANDO'; partida.cartaActiva = null; partida.minijuegoActivo = null;
     armarWatchdog(); emitirEstado();
 }
 
 function marcarFin(ganadorId) {
-    limpiarTimer(); partida.estado = 'FIN'; partida.ganadorId = ganadorId; partida.cartaActiva = null; partida.reto = null; partida.minijuegoActivo = null;
+    limpiarTimer(); partida.estado = 'FIN'; partida.ganadorId = ganadorId; partida.cartaActiva = null; partida.minijuegoActivo = null;
 }
 
 function reiniciarTodo() {
@@ -235,17 +144,16 @@ function armarWatchdog() {
         case 'CARTA_ACTIVA': armarTimer(T.CARTA, () => { if (partida.cartaActiva) cerrarCarta(partida.cartaActiva.jugadorId); }); break;
         case 'MINIJUEGO': {
             const mj = partida.minijuegoActivo;
-            if (partida.reto) {
-                armarTimer(T.ELEGIR_RIVAL, retoAutomatico);
-            } else if (mj && mj.tipo === 'memoria') {
-                // Nuevo: El Watchdog de Memoria
-                armarTimer(MotorMemoria.msHastaVencer(), () => MotorMemoria.vencio());
-            } else if (mj && mj.terminado) {
+            if (mj && mj.terminado) {
+                // IMPORTANTE: este chequeo va ANTES que los de tipo específico.
+                // Si no, un minijuego ya terminado vuelve a caer en su propia rama
+                // de "en curso" y nunca se llega a cerrarMinijuego(): el modal
+                // queda trabado y las posiciones no se actualizan nunca.
                 armarTimer(T.CIERRE_MINIJUEGO, cerrarMinijuego);
+            } else if (mj && mj.tipo === 'memoria') {
+                armarTimer(MotorMemoria.msHastaVencer(), () => MotorMemoria.vencio());
             } else if (mj && mj.tipo === 'rapidez') {
-                armarTimer(Math.max(1000, mj.fin - Date.now() + 500), cerrarRapidezPorTiempo);
-            } else if (mj) {
-                armarTimer(T.TURNO_MINIJUEGO, () => { const m = partida.minijuegoActivo; if (m && !m.terminado) finalizarMinijuego(m.turno === 'X' ? 'O' : 'X', 'POR TIEMPO'); });
+                armarTimer(MotorRapidez.msHastaVencer(), () => MotorRapidez.vencio());
             }
             break;
         }
@@ -276,29 +184,14 @@ function evaluarCasillero(jugadorId, permitirEspecial) {
     }
 
     if (tipo === 'reto') {
-        const oponentes = Object.values(partida.jugadores).filter(j => j.id !== jugadorId && j.conectado).map(j => ({ id: j.id, nombre: j.nombre, avatar: j.avatar }));
-        
-        // RULETA DE PROBABILIDADES: 90% Memoria, 10% el resto (~3.33% cada uno)
-        let juegoElegido = '';
-        const rand = Math.random();
-        if (rand < 0.90) juegoElegido = 'memoria';
-        else if (rand < 0.9333) juegoElegido = 'tateti';
-        else if (rand < 0.9666) juegoElegido = 'conecta4';
-        else juegoElegido = 'rapidez';
-
-        if (juegoElegido === 'memoria') {
-            // Memoria lo juegan todos, arranca instantáneo sin elegir oponente
-            partida.estado = 'MINIJUEGO';
-            partida.minijuegoActivo = MotorMemoria.crear(jugadorId);
-            return true;
-        } else {
-            // Los demás son 1v1, requiere oponente
-            if (oponentes.length) {
-                partida.estado = 'MINIJUEGO';
-                partida.reto = { atacanteId: jugadorId, oponentes, juego: juegoElegido };
-                return true;
-            }
-        }
+        // Los dos minijuegos activos los juegan TODOS los conectados a la vez:
+        // arrancan directo, sin elegir rival ni esperar a nadie más que a que
+        // el propio motor esté listo.
+        partida.estado = 'MINIJUEGO';
+        partida.minijuegoActivo = Math.random() < 0.5
+            ? MotorMemoria.crear(jugadorId)
+            : MotorRapidez.crear(jugadorId);
+        return true;
     }
     return false;
 }
@@ -332,153 +225,24 @@ function cerrarCarta(jugadorId) {
     avanzarTurno(); volverAJugar(); return true;
 }
 
-function iniciarReto(atacanteId, defensorId) {
-    const r = partida.reto;
-    if (partida.estado !== 'MINIJUEGO' || !r || r.atacanteId !== atacanteId) return false;
-    if (!r.oponentes.some(o => o.id === defensorId) || !partida.jugadores[defensorId]) return false;
-
-    const nombres = { X: partida.jugadores[atacanteId].nombre, O: partida.jugadores[defensorId].nombre };
-    partida.reto = null;
-    
-    if (r.juego === 'conecta4') partida.minijuegoActivo = MotorConecta4.crearInstancia(atacanteId, defensorId, nombres);
-    else if (r.juego === 'rapidez') partida.minijuegoActivo = MotorRapidez.crearInstancia(atacanteId, defensorId, nombres);
-    else partida.minijuegoActivo = MotorTaTeTi.crearInstancia(atacanteId, defensorId, nombres);
-
-    armarWatchdog(); emitirEstado(); return true;
-}
-
-function retoAutomatico() {
-    const r = partida.reto;
-    if (partida.estado !== 'MINIJUEGO' || !r) return;
-    const vivos = r.oponentes.filter(o => partida.jugadores[o.id] && partida.jugadores[o.id].conectado);
-    if (!vivos.length) { avanzarTurno(); return volverAJugar(); }
-    iniciarReto(r.atacanteId, vivos[Math.floor(Math.random() * vivos.length)].id);
-}
-
-function accionTateti(jugadorId, idx) {
-    const mj = partida.minijuegoActivo;
-    if (partida.estado !== 'MINIJUEGO' || !mj || mj.tipo !== 'tateti' || mj.terminado) return false;
-    if (!Number.isInteger(idx) || idx < 0 || idx > 8) return false;
-
-    const simbolo = mj.jugadores.X === jugadorId ? 'X' : mj.jugadores.O === jugadorId ? 'O' : null;
-    if (!simbolo || simbolo !== mj.turno) return false;
-
-    let cambioTurno = false;
-    const otro = simbolo === 'X' ? 'O' : 'X';
-
-    if (mj.fase === 'COLOCAR') {
-        if (mj.tablero[idx] !== null) return false;
-        mj.tablero[idx] = simbolo; mj.fichasPuestas[simbolo]++;
-        if (mj.fichasPuestas.X === 3 && mj.fichasPuestas.O === 3) mj.fase = 'MOVER';
-        mj.turno = otro; cambioTurno = true;
-    } else {
-        if (mj.tablero[idx] === simbolo) { mj.seleccionado = idx; } 
-        else if (mj.seleccionado !== null && mj.tablero[idx] === null) {
-            mj.tablero[idx] = simbolo; mj.tablero[mj.seleccionado] = null; mj.seleccionado = null; mj.jugadas++; mj.turno = otro; cambioTurno = true;
-        } else return false;
-    }
-
-    const ganador = MotorTaTeTi.verificarGanador(mj.tablero);
-    if (ganador) finalizarMinijuego(ganador);
-    else if (mj.jugadas >= MAX_JUGADAS_MOVER) finalizarMinijuego('EMPATE');
-    else { if (cambioTurno) armarWatchdog(); emitirEstado(); }
-    return true;
-}
-
-function accionConecta4(jugadorId, columna) {
-    const mj = partida.minijuegoActivo;
-    if (partida.estado !== 'MINIJUEGO' || !mj || mj.tipo !== 'conecta4' || mj.terminado) return false;
-    if (!Number.isInteger(columna) || columna < 0 || columna >= CONECTA4_COLS) return false;
-
-    const simbolo = mj.jugadores.X === jugadorId ? 'X' : mj.jugadores.O === jugadorId ? 'O' : null;
-    if (!simbolo || simbolo !== mj.turno) return false;
-
-    const fila = MotorConecta4.filaDisponible(mj.tablero, columna);
-    if (fila === -1) return false; 
-
-    mj.tablero[fila * CONECTA4_COLS + columna] = simbolo; mj.turno = simbolo === 'X' ? 'O' : 'X';
-
-    const ganador = MotorConecta4.verificarGanador(mj.tablero);
-    if (ganador) finalizarMinijuego(ganador);
-    else if (MotorConecta4.tableroLleno(mj.tablero)) finalizarMinijuego('EMPATE');
-    else { armarWatchdog(); emitirEstado(); }
-    return true;
-}
-
-function accionRapidez(jugadorId, datos) {
-    const mj = partida.minijuegoActivo;
-    if (partida.estado !== 'MINIJUEGO' || !mj || mj.tipo !== 'rapidez' || mj.terminado) return false;
-
-    const simbolo = mj.jugadores.X === jugadorId ? 'X' : mj.jugadores.O === jugadorId ? 'O' : null;
-    if (!simbolo) return false; 
-
-    const idObjeto = datos && datos.idObjeto;
-    if (!Number.isInteger(idObjeto)) return false;
-
-    const o = MotorRapidez.buscar(mj, idObjeto);
-    if (!o || mj.tomados[idObjeto]) return false;
-
-    const t = Date.now() - mj.inicio;
-    if (t < -RAPIDEZ.TOLERANCIA) return false;
-    if (t < o.aparece - RAPIDEZ.TOLERANCIA || t > o.aparece + o.dura + RAPIDEZ.TOLERANCIA) return false;
-
-    let resultado;
-    if (!o.bueno) {
-        const err = mj.errores[idObjeto] || (mj.errores[idObjeto] = {});
-        if (err[simbolo]) return false;                      
-        err[simbolo] = true; mj.puntos[simbolo] = Math.max(0, mj.puntos[simbolo] - 1); resultado = 'fallo';
-    } else if (o.hold) {
-        if (!datos || datos.accion !== 'hold') return false; 
-        mj.tomados[idObjeto] = simbolo; mj.puntos[simbolo]++; resultado = 'punto';
-    } else if (o.clicks) {
-        const g = mj.golpes[idObjeto] || (mj.golpes[idObjeto] = { X: 0, O: 0 });
-        g[simbolo]++;
-        if (g[simbolo] >= o.clicks) { mj.tomados[idObjeto] = simbolo; mj.puntos[simbolo]++; resultado = 'punto'; } 
-        else { resultado = 'progreso'; }
-    } else { mj.tomados[idObjeto] = simbolo; mj.puntos[simbolo]++; resultado = 'punto'; }
-
-    io.emit('rapidez_tick', { idObjeto, simbolo, resultado, golpes: mj.golpes[idObjeto] || null, puntos: mj.puntos });
-    if (mj.puntos[simbolo] >= mj.meta) finalizarMinijuego(simbolo, `${mj.puntos.X}-${mj.puntos.O}`);
-    return true;
-}
-
-function cerrarRapidezPorTiempo() {
-    const mj = partida.minijuegoActivo;
-    if (partida.estado !== 'MINIJUEGO' || !mj || mj.tipo !== 'rapidez' || mj.terminado) return;
-    const { X, O } = mj.puntos;
-    finalizarMinijuego(X === O ? 'EMPATE' : (X > O ? 'X' : 'O'), `SE ACABÓ EL TIEMPO ${X}-${O}`);
-}
-
-function finalizarMinijuego(resultado, nota) {
-    const mj = partida.minijuegoActivo;
-    if (!mj || mj.terminado) return;
-
-    const atacante = partida.jugadores[mj.jugadores.X];
-    const sufijo = nota ? ` (${nota})` : '';
-    mj.terminado = true; mj.ganador = resultado;
-
-    if (resultado === 'X') {
-        atacante.casillero = Math.min(META, atacante.casillero + 2);
-        mj.mensaje = `¡GANÓ ${mj.nombres.X}! EL ATACANTE AVANZA 2.${sufijo}`;
-    } else if (resultado === 'O') {
-        atacante.casillero = Math.max(0, atacante.casillero - 2);
-        mj.mensaje = `¡GANÓ ${mj.nombres.O}! EL ATACANTE RETROCEDE 2.${sufijo}`;
-    } else {
-        mj.mensaje = `EMPATE. NADIE SE MUEVE.${sufijo}`;
-    }
-
-    armarWatchdog(); emitirEstado();
-}
-
 function cerrarMinijuego() {
     const mj = partida.minijuegoActivo;
     if (partida.estado !== 'MINIJUEGO' || !mj) return;
-    
-    // CORRECCIÓN PARA QUE CUBRA TODOS LOS JUEGOS: 
-    // Memoria guarda al atacante en 'atacanteId'. TaTeTi/Conecta4/Rapidez en 'jugadores.X'
-    const atacanteId = mj.atacanteId || mj.jugadores.X; 
 
-    partida.minijuegoActivo = null; partida.reto = null;
+    const atacanteId = mj.atacanteId;
+    partida.minijuegoActivo = null;
+
+    // Memoria y Rapidez pueden mover a varios jugadores a la vez (no solo al
+    // atacante que disparó el reto): si alguno llegó justo a la meta con el
+    // premio, hay que reconocerlo como ganador aunque no sea el atacante.
+    const participantes = mj.jugadores;
+    for (const id of participantes) {
+        if (id !== atacanteId && partida.jugadores[id] && partida.jugadores[id].casillero >= META) {
+            marcarFin(id);
+            emitirEstado();
+            return;
+        }
+    }
 
     const generoEvento = evaluarCasillero(atacanteId, !partida.cascadaUsada);
 
@@ -525,12 +289,9 @@ io.on('connection', (socket) => {
     socket.on('iniciar_juego', () => { if (socket.jugadorId !== partida.hostId || partida.estado !== 'LOBBY') return resync(); const lista = Object.values(partida.jugadores); if (lista.length < 2) return socket.emit('error_accion', 'Mínimo 2'); if (!lista.every(j => j.listo && j.conectado)) return socket.emit('error_accion', 'Todos listos'); lista.forEach(j => { j.casillero = 0; }); partida.ordenTurnos = lista.map(j => j.id); partida.turnoActual = partida.ordenTurnos[0]; partida.ultimoDado = null; partida.ganadorId = null; partida.estado = 'JUGANDO'; armarWatchdog(); emitirEstado(); });
     socket.on('tirar_dado', () => { if (!tirarDado(socket.jugadorId)) resync(); });
     socket.on('cerrar_carta', () => { if (!cerrarCarta(socket.jugadorId)) resync(); });
-    socket.on('seleccionar_oponente_reto', (d) => { if (!iniciarReto(socket.jugadorId, d && d.defensorId)) resync(); });
-    socket.on('accion_tateti', (d) => { if (!accionTateti(socket.jugadorId, d && d.indexBoton)) resync(); });
-    socket.on('accion_conecta4', (d) => { if (!accionConecta4(socket.jugadorId, d && d.columna)) resync(); });
-    socket.on('accion_rapidez', (d) => { accionRapidez(socket.jugadorId, d); });
+    socket.on('accion_rapidez', (d) => { MotorRapidez.accion(socket.jugadorId, d); });
 
-    // NUEVOS EVENTOS DE MEMORIA AÑADIDOS
+    // EVENTOS DE MEMORIA
     socket.on('memoria_listo', () => { MotorMemoria.listo(socket.jugadorId); });
     socket.on('memoria_ronda', (d) => { MotorMemoria.accion(socket.jugadorId, d, (ev, data) => socket.emit(ev, data)); });
 
